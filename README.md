@@ -88,7 +88,7 @@ Notes:
 
 ## Agent counts for billing
 
-**Usage → Get Agent Counts by Company** emits one item per company:
+**Usage → Get Agent Counts by Company** emits one flat item per company on the first output:
 
 ```json
 {
@@ -96,21 +96,22 @@ Notes:
   "companyName": "Acme Industries",
   "managementSystemCompanyId": "PSA-1234",
   "activeAgents": 37,
-  "byElevationMode": { "audit": 2, "live": 35, "policy": 0, "technicianBypass": 0, "unknown": 0 }
+  "agentsAudit": 2, "agentsLive": 35, "agentsPolicy": 0, "agentsTechnicianBypass": 0, "agentsUnknownMode": 0
 }
 ```
 
-and, when **Include MSP Summary Item** is on, a final item:
+With **Add Summary Output** on (the default) the node gains a second output, **Summary**, that
+carries one item:
 
 ```json
-{ "summary": true, "partnerName": "…", "fromUsage": 590, "fromComputers": 593, "agree": false, "companies": 36 }
+{ "partnerName": "…", "activeAgentsFromUsage": 590, "activeAgentsFromComputers": 593, "agree": false, "companies": 36 }
 ```
 
-`fromUsage` is the API's periodically refreshed snapshot; `fromComputers` is the live walk. A
-difference of a few units is snapshot lag. `managementSystemCompanyId` is the key a PSA
-integration set when it created the company, which is how you join these rows to Autotask,
-ConnectWise, or Halo. Companies with zero agents are present with `0`; a computer whose company
-the key can't see appears in a row with `companyName: null`.
+`activeAgentsFromUsage` is the API's periodically refreshed snapshot; `activeAgentsFromComputers`
+is the live walk. A difference of a few units is snapshot lag. `managementSystemCompanyId` is the
+key a PSA integration set when it created the company, which is how you join these rows to
+Autotask, ConnectWise, or Halo. Companies with zero agents are present with `0`; a computer
+whose company the key can't see appears in a row with `companyName: null`.
 
 The operation walks `/companies` and `/computers` once each and reads `/usage` once. For N
 computers and C companies that is `ceil(N/200) + ceil(C/200) + 1` requests.

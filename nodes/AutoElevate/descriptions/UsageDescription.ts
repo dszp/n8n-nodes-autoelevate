@@ -26,12 +26,12 @@ export const usageOperations: INodeProperties[] = [
 		default: 'get',
 	},
 	{
-		displayName: 'Include MSP Summary Item',
+		displayName: 'Add Summary Output',
 		name: 'includeSummary',
 		type: 'boolean',
 		default: true,
 		description:
-			'Whether to append one item with the MSP totals (usage snapshot vs. computers walked) after the per-company items.',
+			'Whether to add a second output with one item of MSP totals (usage snapshot vs. computers walked). Company rows always go to the first output.',
 		displayOptions: { show: { resource: ['usage'], operation: ['agentCountsByCompany'] } },
 	},
 ];

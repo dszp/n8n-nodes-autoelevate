@@ -103,7 +103,13 @@ export class AutoElevate implements INodeType {
 			'Read data from the AutoElevate Partner API: companies, computers, elevation activity, and per-company agent counts for billing',
 		defaults: { name: 'AutoElevate' },
 		inputs: [NodeConnectionTypes.Main],
-		outputs: [NodeConnectionTypes.Main],
+		// Get Agent Counts by Company emits company rows on the first output and, when enabled, one
+		// MSP summary item on a second output, so neither downstream branch has to filter the other.
+		outputs: `={{
+			$parameter["resource"] === "usage" && $parameter["operation"] === "agentCountsByCompany" && $parameter["includeSummary"]
+				? [{ type: "${NodeConnectionTypes.Main}", displayName: "Companies" }, { type: "${NodeConnectionTypes.Main}", displayName: "Summary" }]
+				: [{ type: "${NodeConnectionTypes.Main}" }]
+		}}`,
 		usableAsTool: true,
 		credentials: [{ name: 'autoElevateApi', required: true, testedBy: 'autoElevateApiTest' }],
 		properties: [
@@ -220,6 +226,7 @@ export class AutoElevate implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
+		const summaryData: INodeExecutionData[] = [];
 		const resource = this.getNodeParameter('resource', 0) as string;
 		const operation = this.getNodeParameter('operation', 0) as string;
 
@@ -230,7 +237,15 @@ export class AutoElevate implements INodeType {
 				if (resource === 'usage' && operation === 'get') {
 					out = [(await autoElevateApiRequest.call(this, 'GET', '/usage')) as IDataObject];
 				} else if (resource === 'usage' && operation === 'agentCountsByCompany') {
-					out = await agentCountsByCompany.call(this, i);
+					const { companies, summary } = await agentCountsByCompany.call(this, i);
+					out = companies;
+					if (summary) {
+						summaryData.push(
+							...this.helpers.constructExecutionMetaData(this.helpers.returnJsonArray([summary]), {
+								itemData: { item: i },
+							}),
+						);
+					}
 				} else if (operation === 'get') {
 					const id = this.getNodeParameter('id', i) as string;
 					if (!id.trim()) {
@@ -278,19 +293,23 @@ export class AutoElevate implements INodeType {
 			}
 		}
 
-		return [returnData];
+		const includeSummary =
+			resource === 'usage' &&
+			operation === 'agentCountsByCompany' &&
+			(this.getNodeParameter('includeSummary', 0, true) as boolean);
+		return includeSummary ? [returnData, summaryData] : [returnData];
 	}
 }
 
 /**
  * Per-company active-agent counts. Walks /companies and /computers once each (200 rows per page),
  * buckets in memory, and reads /usage for the MSP total. Mirrors `gatherAgentCounts` in
- * `@dszp/autoelevate-lib`.
+ * `@dszp/autoelevate-lib`, flattened so each company is one table row.
  */
 async function agentCountsByCompany(
 	this: IExecuteFunctions,
 	itemIndex: number,
-): Promise<IDataObject[]> {
+): Promise<{ companies: IDataObject[]; summary?: IDataObject }> {
 	const includeSummary = this.getNodeParameter('includeSummary', itemIndex, true) as boolean;
 	const [usage, companies, computers] = await Promise.all([
 		autoElevateApiRequest.call(this, 'GET', '/usage') as Promise<{
@@ -302,19 +321,23 @@ async function agentCountsByCompany(
 		autoElevateApiRequestAllItems.call(this, '/computers') as Promise<Computer[]>,
 	]);
 
+	type Row = {
+		companyId: string;
+		companyName: string | null;
+		managementSystemCompanyId: string | null;
+		activeAgents: number;
+		modes: Record<string, number>;
+	};
 	const emptyModes = () =>
 		Object.fromEntries(ELEVATION_MODES.map((m) => [m, 0])) as Record<string, number>;
-	const rows = new Map<
-		string,
-		IDataObject & { activeAgents: number; byElevationMode: Record<string, number> }
-	>();
+	const rows = new Map<string, Row>();
 	for (const c of companies) {
 		rows.set(c.id, {
 			companyId: c.id,
 			companyName: c.name,
 			managementSystemCompanyId: c.managementSystemCompanyId,
 			activeAgents: 0,
-			byElevationMode: emptyModes(),
+			modes: emptyModes(),
 		});
 	}
 	for (const m of computers) {
@@ -325,27 +348,37 @@ async function agentCountsByCompany(
 				companyName: null,
 				managementSystemCompanyId: null,
 				activeAgents: 0,
-				byElevationMode: emptyModes(),
+				modes: emptyModes(),
 			};
 			rows.set(m.companyId, row);
 		}
 		row.activeAgents++;
-		row.byElevationMode[m.elevationMode ?? 'unknown']++;
+		row.modes[m.elevationMode ?? 'unknown']++;
 	}
-	const out: IDataObject[] = [...rows.values()].sort((a, b) =>
-		String(a.companyName ?? '￿').localeCompare(String(b.companyName ?? '￿')),
+	const sorted = [...rows.values()].sort((a, b) =>
+		String(a.companyName ?? '\uffff').localeCompare(String(b.companyName ?? '\uffff')),
 	);
-	if (includeSummary) {
-		out.push({
-			summary: true,
-			partnerId: usage.partnerId,
-			partnerName: usage.partnerName,
-			fromUsage: usage.totalActiveAgents,
-			fromComputers: computers.length,
-			agree: usage.totalActiveAgents === computers.length,
-			companies: companies.length,
-			gatheredAt: Date.now(),
-		});
-	}
-	return out;
+	const flat: IDataObject[] = sorted.map((r) => ({
+		companyId: r.companyId,
+		companyName: r.companyName,
+		managementSystemCompanyId: r.managementSystemCompanyId,
+		activeAgents: r.activeAgents,
+		agentsAudit: r.modes.audit,
+		agentsLive: r.modes.live,
+		agentsPolicy: r.modes.policy,
+		agentsTechnicianBypass: r.modes.technicianBypass,
+		agentsUnknownMode: r.modes.unknown,
+	}));
+	const summary: IDataObject | undefined = includeSummary
+		? {
+				partnerId: usage.partnerId,
+				partnerName: usage.partnerName,
+				activeAgentsFromUsage: usage.totalActiveAgents,
+				activeAgentsFromComputers: computers.length,
+				agree: usage.totalActiveAgents === computers.length,
+				companies: companies.length,
+				gatheredAt: Date.now(),
+			}
+		: undefined;
+	return { companies: flat, summary };
 }
