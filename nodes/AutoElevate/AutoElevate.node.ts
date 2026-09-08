@@ -69,6 +69,21 @@ interface Computer {
 	elevationMode: string | null;
 }
 
+/**
+ * Add an ISO-8601 UTC twin next to every epoch-millisecond timestamp. The API names all of its
+ * time fields `…At` (createdAt, lastCheckedInAt, occurredAt, …), so the suffix is the contract;
+ * the original number stays in place for arithmetic and the `…AtIso` column reads at a glance.
+ */
+function withIsoTimestamps(row: IDataObject): IDataObject {
+	const out: IDataObject = { ...row };
+	for (const [k, v] of Object.entries(row)) {
+		if (k.endsWith('At') && typeof v === 'number' && Number.isFinite(v)) {
+			out[`${k}Iso`] = new Date(v).toISOString();
+		}
+	}
+	return out;
+}
+
 /** Turn the Filters collection into query parameters; dateTime fields become epoch milliseconds. */
 function toQuery(this: IExecuteFunctions, filters: IDataObject, itemIndex: number): IDataObject {
 	const qs: IDataObject = {};
@@ -241,9 +256,12 @@ export class AutoElevate implements INodeType {
 					out = companies;
 					if (summary) {
 						summaryData.push(
-							...this.helpers.constructExecutionMetaData(this.helpers.returnJsonArray([summary]), {
-								itemData: { item: i },
-							}),
+							...this.helpers.constructExecutionMetaData(
+								this.helpers.returnJsonArray([withIsoTimestamps(summary)]),
+								{
+									itemData: { item: i },
+								},
+							),
 						);
 					}
 				} else if (operation === 'get') {
@@ -278,9 +296,12 @@ export class AutoElevate implements INodeType {
 				}
 
 				returnData.push(
-					...this.helpers.constructExecutionMetaData(this.helpers.returnJsonArray(out), {
-						itemData: { item: i },
-					}),
+					...this.helpers.constructExecutionMetaData(
+						this.helpers.returnJsonArray(out.map(withIsoTimestamps)),
+						{
+							itemData: { item: i },
+						},
+					),
 				);
 			} catch (error) {
 				if (this.continueOnFail()) {

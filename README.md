@@ -81,8 +81,9 @@ Notes:
 - **Computer → Get Many** returns only computers that checked in within the **last 30 days**.
   That is the API's active-fleet window, so it is the billable count, not the inventory.
 - **Start** and **End** accept any date n8n can parse and are sent as epoch milliseconds.
-- Every timestamp in the output is epoch milliseconds. `endedAt` on an elevated session is the
-  scheduled end, not updated if the session ended early.
+- The API returns every timestamp as epoch milliseconds in a field ending in `At`. The node
+  keeps that value and adds an `…AtIso` twin in ISO-8601 UTC (`createdAt` → `createdAtIso`).
+  `endedAt` on an elevated session is the scheduled end, not updated if the session ended early.
 - The company and location dropdowns list what the key can see. A restricted key sees only
   its permitted companies.
 
