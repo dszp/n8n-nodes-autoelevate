@@ -64,5 +64,13 @@ export class AutoElevateApi implements ICredentialType {
 			description:
 				'Leave at the default unless AutoElevate gives you another endpoint. Must be HTTPS.',
 		},
+		{
+			displayName: 'Allow Write Operations',
+			name: 'allowWrites',
+			type: 'boolean',
+			default: false,
+			description:
+				'Whether this credential may approve or deny elevation requests. Off by default so a read-only integration cannot be turned into a write by a workflow edit or an AI agent. The key also needs the requestEdit scope.',
+		},
 	];
 }
