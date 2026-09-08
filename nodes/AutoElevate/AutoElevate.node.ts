@@ -1,0 +1,351 @@
+import type {
+	ICredentialsDecrypted,
+	ICredentialTestFunctions,
+	IDataObject,
+	IExecuteFunctions,
+	ILoadOptionsFunctions,
+	INodeCredentialTestResult,
+	INodeExecutionData,
+	INodePropertyOptions,
+	INodeType,
+	INodeTypeDescription,
+} from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+
+import { auditLogFields, auditLogOperations } from './descriptions/AuditLogDescription';
+import { companyFields, companyOperations } from './descriptions/CompanyDescription';
+import { computerFields, computerOperations } from './descriptions/ComputerDescription';
+import {
+	elevatedSessionFields,
+	elevatedSessionOperations,
+} from './descriptions/ElevatedSessionDescription';
+import {
+	elevationEventFields,
+	elevationEventOperations,
+} from './descriptions/ElevationEventDescription';
+import {
+	elevationRequestFields,
+	elevationRequestOperations,
+} from './descriptions/ElevationRequestDescription';
+import {
+	elevationRuleFields,
+	elevationRuleOperations,
+} from './descriptions/ElevationRuleDescription';
+import { locationFields, locationOperations } from './descriptions/LocationDescription';
+import { usageOperations } from './descriptions/UsageDescription';
+import {
+	ACKNOWLEDGMENT_HEADER,
+	ACKNOWLEDGMENT_VALUE,
+	autoElevateApiRequest,
+	autoElevateApiRequestAllCursor,
+	autoElevateApiRequestAllItems,
+	buildAuthorization,
+	buildTarget,
+	normalizeBaseUrl,
+	type AutoElevateCredentials,
+} from './transport/request';
+
+/** Resource → list path, for the generic Get / Get Many handlers. */
+const LIST_PATH: Record<string, string> = {
+	company: '/companies',
+	computer: '/computers',
+	location: '/locations',
+	elevationRequest: '/elevation-requests',
+	elevationEvent: '/elevation-events',
+	elevatedSession: '/elevated-sessions',
+	elevationRule: '/elevation-rules',
+	auditLog: '/audit-logs',
+};
+
+const ELEVATION_MODES = ['audit', 'live', 'policy', 'technicianBypass', 'unknown'] as const;
+
+interface Company {
+	id: string;
+	name: string;
+	managementSystemCompanyId: string | null;
+}
+interface Computer {
+	companyId: string;
+	elevationMode: string | null;
+}
+
+/** Turn the Filters collection into query parameters; dateTime fields become epoch milliseconds. */
+function toQuery(this: IExecuteFunctions, filters: IDataObject, itemIndex: number): IDataObject {
+	const qs: IDataObject = {};
+	for (const [k, v] of Object.entries(filters)) {
+		if (v === '' || v === undefined || v === null) continue;
+		if (k === 'start' || k === 'end') {
+			const ms = Date.parse(String(v));
+			if (Number.isNaN(ms)) {
+				throw new NodeOperationError(
+					this.getNode(),
+					`"${k === 'start' ? 'Start' : 'End'}" is not a date: ${String(v)}. Enter an ISO date or use an expression.`,
+					{ itemIndex },
+				);
+			}
+			qs[k] = ms;
+		} else {
+			qs[k] = v as string;
+		}
+	}
+	return qs;
+}
+
+export class AutoElevate implements INodeType {
+	description: INodeTypeDescription = {
+		displayName: 'AutoElevate',
+		name: 'autoElevate',
+		icon: { light: 'file:AutoElevate.svg', dark: 'file:AutoElevate.dark.svg' },
+		group: ['transform'],
+		version: 1,
+		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
+		description:
+			'Read data from the AutoElevate Partner API: companies, computers, elevation activity, and per-company agent counts for billing',
+		defaults: { name: 'AutoElevate' },
+		inputs: [NodeConnectionTypes.Main],
+		outputs: [NodeConnectionTypes.Main],
+		usableAsTool: true,
+		credentials: [{ name: 'autoElevateApi', required: true, testedBy: 'autoElevateApiTest' }],
+		properties: [
+			{
+				displayName: 'Resource',
+				name: 'resource',
+				type: 'options',
+				noDataExpression: true,
+				options: [
+					{ name: 'Audit Log', value: 'auditLog' },
+					{ name: 'Company', value: 'company' },
+					{ name: 'Computer', value: 'computer' },
+					{ name: 'Elevated Session', value: 'elevatedSession' },
+					{ name: 'Elevation Event', value: 'elevationEvent' },
+					{ name: 'Elevation Request', value: 'elevationRequest' },
+					{ name: 'Elevation Rule', value: 'elevationRule' },
+					{ name: 'Location', value: 'location' },
+					{ name: 'Usage', value: 'usage' },
+				],
+				default: 'usage',
+			},
+			...usageOperations,
+			...companyOperations,
+			...companyFields,
+			...computerOperations,
+			...computerFields,
+			...locationOperations,
+			...locationFields,
+			...elevationRequestOperations,
+			...elevationRequestFields,
+			...elevationEventOperations,
+			...elevationEventFields,
+			...elevatedSessionOperations,
+			...elevatedSessionFields,
+			...elevationRuleOperations,
+			...elevationRuleFields,
+			...auditLogOperations,
+			...auditLogFields,
+		],
+	};
+
+	methods = {
+		credentialTest: {
+			/**
+			 * Signs a real GET /usage. Done here rather than in the credential file because the HMAC
+			 * scheme needs a computed header. Uses the platform `fetch` so no deprecated helper is
+			 * involved; the test is one request and honours no proxy settings.
+			 */
+			async autoElevateApiTest(
+				this: ICredentialTestFunctions,
+				credential: ICredentialsDecrypted,
+			): Promise<INodeCredentialTestResult> {
+				const creds = credential.data as unknown as AutoElevateCredentials;
+				try {
+					const base = normalizeBaseUrl(creds.baseUrl);
+					const target = buildTarget('/usage');
+					const res = await fetch(`${base}${target}`, {
+						method: 'GET',
+						headers: {
+							Accept: 'application/json',
+							[ACKNOWLEDGMENT_HEADER]: ACKNOWLEDGMENT_VALUE,
+							Authorization: buildAuthorization(creds, 'GET', target),
+						},
+					});
+					if (res.ok) {
+						const body = (await res.json()) as { partnerName?: string; totalActiveAgents?: number };
+						return {
+							status: 'OK',
+							message: `Connected to ${body.partnerName ?? 'AutoElevate'} (${body.totalActiveAgents ?? '?'} active agents)`,
+						};
+					}
+					const text = await res.text();
+					let detail = text;
+					try {
+						detail = (JSON.parse(text) as { message?: string }).message ?? text;
+					} catch {
+						/* keep text */
+					}
+					const why =
+						res.status === 401
+							? 'Check the token, the signing key, and that "Authentication" matches the scheme the key was created with.'
+							: res.status === 403
+								? 'The key lacks the computerView scope needed for this test.'
+								: '';
+					return { status: 'Error', message: `HTTP ${res.status}: ${detail} ${why}`.trim() };
+				} catch (error) {
+					return { status: 'Error', message: (error as Error).message };
+				}
+			},
+		},
+		loadOptions: {
+			async getCompanies(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const rows = (await autoElevateApiRequestAllItems.call(this, '/companies')) as Company[];
+				return rows
+					.map((c) => ({ name: c.name, value: c.id }))
+					.sort((a, b) => a.name.localeCompare(b.name));
+			},
+			async getLocations(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const rows = (await autoElevateApiRequestAllItems.call(this, '/locations')) as Array<{
+					id: string;
+					name: string;
+					companyName: string | null;
+				}>;
+				return rows
+					.map((l) => ({
+						name: l.companyName ? `${l.companyName} / ${l.name}` : l.name,
+						value: l.id,
+					}))
+					.sort((a, b) => a.name.localeCompare(b.name));
+			},
+		},
+	};
+
+	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const items = this.getInputData();
+		const returnData: INodeExecutionData[] = [];
+		const resource = this.getNodeParameter('resource', 0) as string;
+		const operation = this.getNodeParameter('operation', 0) as string;
+
+		for (let i = 0; i < items.length; i++) {
+			try {
+				let out: IDataObject[];
+
+				if (resource === 'usage' && operation === 'get') {
+					out = [(await autoElevateApiRequest.call(this, 'GET', '/usage')) as IDataObject];
+				} else if (resource === 'usage' && operation === 'agentCountsByCompany') {
+					out = await agentCountsByCompany.call(this, i);
+				} else if (operation === 'get') {
+					const id = this.getNodeParameter('id', i) as string;
+					if (!id.trim()) {
+						throw new NodeOperationError(this.getNode(), 'Enter an ID in the ID field.', {
+							itemIndex: i,
+						});
+					}
+					out = [
+						(await autoElevateApiRequest.call(
+							this,
+							'GET',
+							`${LIST_PATH[resource]}/${encodeURIComponent(id.trim())}`,
+						)) as IDataObject,
+					];
+				} else if (operation === 'getAll') {
+					const returnAll = this.getNodeParameter('returnAll', i) as boolean;
+					const limit = returnAll ? undefined : (this.getNodeParameter('limit', i) as number);
+					const qs = toQuery.call(this, this.getNodeParameter('filters', i, {}) as IDataObject, i);
+					out = (
+						resource === 'auditLog'
+							? await autoElevateApiRequestAllCursor.call(this, LIST_PATH[resource], qs, limit)
+							: await autoElevateApiRequestAllItems.call(this, LIST_PATH[resource], qs, limit)
+					) as IDataObject[];
+				} else {
+					throw new NodeOperationError(
+						this.getNode(),
+						`The operation "${operation}" is not supported for resource "${resource}".`,
+						{ itemIndex: i },
+					);
+				}
+
+				returnData.push(
+					...this.helpers.constructExecutionMetaData(this.helpers.returnJsonArray(out), {
+						itemData: { item: i },
+					}),
+				);
+			} catch (error) {
+				if (this.continueOnFail()) {
+					returnData.push({ json: { error: (error as Error).message }, pairedItem: { item: i } });
+					continue;
+				}
+				// NodeApiError/NodeOperationError from the transport carry their own message and hint;
+				// wrapping keeps the item index attached in every case.
+				throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
+			}
+		}
+
+		return [returnData];
+	}
+}
+
+/**
+ * Per-company active-agent counts. Walks /companies and /computers once each (200 rows per page),
+ * buckets in memory, and reads /usage for the MSP total. Mirrors `gatherAgentCounts` in
+ * `@dszp/autoelevate-lib`.
+ */
+async function agentCountsByCompany(
+	this: IExecuteFunctions,
+	itemIndex: number,
+): Promise<IDataObject[]> {
+	const includeSummary = this.getNodeParameter('includeSummary', itemIndex, true) as boolean;
+	const [usage, companies, computers] = await Promise.all([
+		autoElevateApiRequest.call(this, 'GET', '/usage') as Promise<{
+			partnerId: string;
+			partnerName: string;
+			totalActiveAgents: number;
+		}>,
+		autoElevateApiRequestAllItems.call(this, '/companies') as Promise<Company[]>,
+		autoElevateApiRequestAllItems.call(this, '/computers') as Promise<Computer[]>,
+	]);
+
+	const emptyModes = () =>
+		Object.fromEntries(ELEVATION_MODES.map((m) => [m, 0])) as Record<string, number>;
+	const rows = new Map<
+		string,
+		IDataObject & { activeAgents: number; byElevationMode: Record<string, number> }
+	>();
+	for (const c of companies) {
+		rows.set(c.id, {
+			companyId: c.id,
+			companyName: c.name,
+			managementSystemCompanyId: c.managementSystemCompanyId,
+			activeAgents: 0,
+			byElevationMode: emptyModes(),
+		});
+	}
+	for (const m of computers) {
+		let row = rows.get(m.companyId);
+		if (!row) {
+			row = {
+				companyId: m.companyId,
+				companyName: null,
+				managementSystemCompanyId: null,
+				activeAgents: 0,
+				byElevationMode: emptyModes(),
+			};
+			rows.set(m.companyId, row);
+		}
+		row.activeAgents++;
+		row.byElevationMode[m.elevationMode ?? 'unknown']++;
+	}
+	const out: IDataObject[] = [...rows.values()].sort((a, b) =>
+		String(a.companyName ?? '￿').localeCompare(String(b.companyName ?? '￿')),
+	);
+	if (includeSummary) {
+		out.push({
+			summary: true,
+			partnerId: usage.partnerId,
+			partnerName: usage.partnerName,
+			fromUsage: usage.totalActiveAgents,
+			fromComputers: computers.length,
+			agree: usage.totalActiveAgents === computers.length,
+			companies: companies.length,
+			gatheredAt: Date.now(),
+		});
+	}
+	return out;
+}

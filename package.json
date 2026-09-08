@@ -1,0 +1,58 @@
+{
+	"name": "n8n-nodes-autoelevate",
+	"version": "0.1.0",
+	"description": "n8n community node for the AutoElevate Partner API (beta): companies, computers, locations, elevation requests/events/sessions/rules, audit log, and per-company active-agent counts for billing. Read-only.",
+	"license": "MIT",
+	"homepage": "https://github.com/dszp/n8n-nodes-autoelevate",
+	"keywords": [
+		"n8n-community-node-package",
+		"n8n",
+		"autoelevate",
+		"cyberfox",
+		"privilege-management",
+		"pam",
+		"msp"
+	],
+	"author": {
+		"name": "David Szpunar",
+		"email": "davidszp@gmail.com",
+		"url": "https://david.szpunar.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/dszp/n8n-nodes-autoelevate.git"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/AutoElevateApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/AutoElevate/AutoElevate.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "*",
+		"eslint": "9.32.0",
+		"prettier": "3.6.2",
+		"release-it": "^19.0.4",
+		"typescript": "5.9.2",
+		"@types/node": "^22.10.2"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
+}
