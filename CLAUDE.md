@@ -6,7 +6,8 @@
 
 n8n community node for the AutoElevate Partner API (beta). Published to npm as
 `n8n-nodes-autoelevate`. MIT. Author: David Szpunar. Programmatic node, `usableAsTool`,
-read-only by design (approve/deny are deliberately not implemented).
+reads by default; Elevation Request → Approve and Deny are gated behind the credential's
+**Allow Write Operations** toggle (default off) and the key's `requestEdit` scope.
 
 ## Layout
 
@@ -30,6 +31,8 @@ openapi/                                    # vendored spec + provenance README;
 - **Every request carries `X-Acknowledgment: i-understand-this-is-beta-and-may-change`.**
 - **Walkers assert against the first page's `totalCount`** and throw on a short result. The API
   reports `totalCount: 0` once `skip` passes the end.
+- **Writes go through `assertWritesAllowed` first, always; the check is in the transport layer,
+  not the UI.**
 - No `console.log`, no `process`, no `setTimeout`; lint with `npm run lint` before any commit.
 - Bump `nodeVersion` in `AutoElevate.node.json` whenever `package.json` version changes.
 

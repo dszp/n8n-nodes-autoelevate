@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- Elevation Request → Approve and Deny, gated by a new credential toggle **Allow Write Operations**
+  (default off) and the key's `requestEdit` scope. Payloads are validated before the request is sent.
+- 409 responses explain that the request must be PENDING.
+
+### Changed
+- The transport now sends and receives raw JSON strings (`json: false`) so the HMAC body hash covers
+  exactly the bytes on the wire. No change to output shapes.
+
 ## [0.1.1] — 2026-09-08
 
 ### Changed
