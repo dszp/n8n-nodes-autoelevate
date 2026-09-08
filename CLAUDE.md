@@ -31,8 +31,9 @@ openapi/                                    # vendored spec + provenance README;
 - **Every request carries `X-Acknowledgment: i-understand-this-is-beta-and-may-change`.**
 - **Walkers assert against the first page's `totalCount`** and throw on a short result. The API
   reports `totalCount: 0` once `skip` passes the end.
-- **Writes go through `assertWritesAllowed` first, always; the check is in the transport layer,
-  not the UI.**
+- **Writes go through `assertWritesAllowed` at the dispatch site for an item-indexed error, and
+  `autoElevateApiRequest` refuses any non-GET when the credential's Allow Write Operations is
+  off — the transport is the backstop, not the UI.**
 - No `console.log`, no `process`, no `setTimeout`; lint with `npm run lint` before any commit.
 - Bump `nodeVersion` in `AutoElevate.node.json` whenever `package.json` version changes.
 

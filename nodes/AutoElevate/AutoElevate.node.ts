@@ -110,7 +110,10 @@ function toQuery(this: IExecuteFunctions, filters: IDataObject, itemIndex: numbe
 const RULE_LEVELS = new Set(['msp', 'company', 'location', 'computer']);
 const DENIAL_REASON_MAX = 1000;
 
-/** Mirrors @dszp/autoelevate-lib validateApprovePayload/validateDenyPayload. Fails before spending a request. */
+/**
+ * Mirrors @dszp/autoelevate-lib validateApprovePayload/validateDenyPayload, and additionally
+ * drops a Rule Level when Create Rule is off. Fails before spending a request.
+ */
 function validateWritePayload(
 	this: IExecuteFunctions,
 	op: 'approve' | 'deny',
@@ -142,9 +145,17 @@ function validateWritePayload(
 				{ itemIndex },
 			);
 		}
+		const et = body.elevationType;
+		if (et !== undefined && et !== 'admin' && et !== 'user') {
+			throw new NodeOperationError(this.getNode(), '"Elevation Type" must be Admin or User.', {
+				itemIndex,
+			});
+		}
 	} else {
+		// Counted in UTF-16 code units, not [...r].length (code points): matches a JavaScript
+		// server-side validator and errs toward rejecting locally.
 		const r = body.denialReason;
-		if (typeof r === 'string' && [...r].length > DENIAL_REASON_MAX) {
+		if (typeof r === 'string' && r.length > DENIAL_REASON_MAX) {
 			throw new NodeOperationError(
 				this.getNode(),
 				`"Denial Reason" must be at most ${DENIAL_REASON_MAX} characters.`,
@@ -164,7 +175,7 @@ export class AutoElevate implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description:
-			'Read data from the AutoElevate Partner API: companies, computers, elevation activity, and per-company agent counts for billing',
+			'Read AutoElevate Partner API data (companies, computers, elevation activity, per-company agent counts) and, when the credential allows it, approve or deny elevation requests',
 		defaults: { name: 'AutoElevate' },
 		inputs: [NodeConnectionTypes.Main],
 		// Get Agent Counts by Company emits company rows on the first output and, when enabled, one

@@ -127,15 +127,14 @@ async function getCredentials(ctx: Ctx): Promise<AutoElevateCredentials> {
 	return (await ctx.getCredentials('autoElevateApi')) as AutoElevateCredentials;
 }
 
+const WRITES_NOT_ALLOWED_MESSAGE =
+	'This credential does not allow write operations. Turn on "Allow Write Operations" in the AutoElevate API credential (and make sure the key has the requestEdit scope) to approve or deny elevation requests.';
+
 /** Writes are opt-in per credential. Enforced here, not in the UI, so a tool call cannot bypass it. */
 export async function assertWritesAllowed(this: Ctx, itemIndex: number): Promise<void> {
 	const creds = await getCredentials(this);
 	if (creds.allowWrites !== true) {
-		throw new NodeOperationError(
-			this.getNode(),
-			'This credential does not allow write operations. Turn on "Allow Write Operations" in the AutoElevate API credential (and make sure the key has the requestEdit scope) to approve or deny elevation requests.',
-			{ itemIndex },
-		);
+		throw new NodeOperationError(this.getNode(), WRITES_NOT_ALLOWED_MESSAGE, { itemIndex });
 	}
 }
 
@@ -147,6 +146,10 @@ export async function autoElevateApiRequest<T = IDataObject>(
 	body?: unknown,
 ): Promise<T> {
 	const creds = await getCredentials(this);
+	// Backstop for the dispatch-site check: no non-GET leaves this function unless the credential allows writes.
+	if (method !== 'GET' && creds.allowWrites !== true) {
+		throw new NodeOperationError(this.getNode(), WRITES_NOT_ALLOWED_MESSAGE);
+	}
 	const base = normalizeBaseUrl(creds.baseUrl);
 	const target = buildTarget(path, qs);
 	// Serialise once: the HMAC bodyHash and the bytes on the wire must be the same string.
@@ -162,20 +165,22 @@ export async function autoElevateApiRequest<T = IDataObject>(
 		url: `${base}${target}`,
 		headers,
 		body: bodyText,
-		// json:false so n8n neither re-serialises the string body nor pre-parses the response.
+		// json:false only controls the Accept default; the body is already a string above, and
+		// axios parses the response regardless — it always JSON-parses a JSON response body.
 		json: false,
 	};
-	let raw: string;
+	let raw: unknown;
 	try {
-		raw = (await this.helpers.httpRequest(options)) as string;
+		raw = await this.helpers.httpRequest(options);
 	} catch (error) {
 		const e = error as {
 			httpCode?: string;
 			statusCode?: number;
+			status?: number;
 			message?: string;
-			response?: { headers?: Record<string, string> };
+			response?: { status?: number; headers?: Record<string, string> };
 		};
-		const status = Number(e.httpCode ?? e.statusCode ?? 0);
+		const status = Number(e.httpCode ?? e.statusCode ?? e.status ?? e.response?.status ?? 0);
 		const h = hint(status, path);
 		const retryAfter = e.response?.headers?.['retry-after'];
 		throw new NodeApiError(this.getNode(), error as JsonObject, {
@@ -183,6 +188,7 @@ export async function autoElevateApiRequest<T = IDataObject>(
 			description: [h, retryAfter ? `Retry-After: ${retryAfter}s` : ''].filter(Boolean).join(' '),
 		});
 	}
+	if (typeof raw !== 'string') return (raw ?? {}) as T; // axios already parsed the JSON body
 	try {
 		return (raw ? JSON.parse(raw) : {}) as T;
 	} catch {

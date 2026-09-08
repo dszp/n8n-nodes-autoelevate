@@ -33,9 +33,8 @@ the n8n community nodes documentation. The package name is `n8n-nodes-autoelevat
 
 The node reads by default. The two write operations, **Elevation Request → Approve** and
 **Deny**, are off unless the credential has **Allow Write Operations** turned on *and* the key
-carries the `requestEdit` scope. The node checks the toggle before every write, so a workflow edit
-or an AI agent using the node as a tool cannot approve anything with a read-only credential.
-Keep separate credentials for reading and writing.
+carries the `requestEdit` scope; the node checks the toggle before sending anything, and the API
+enforces the scope with a 403. Keep separate credentials for reading and writing.
 
 | Resource | Operations | Filters |
 |---|---|---|
