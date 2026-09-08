@@ -165,9 +165,9 @@ export async function autoElevateApiRequest<T = IDataObject>(
 		// json:false so n8n neither re-serialises the string body nor pre-parses the response.
 		json: false,
 	};
+	let raw: string;
 	try {
-		const raw = (await this.helpers.httpRequest(options)) as string;
-		return (raw ? JSON.parse(raw) : {}) as T;
+		raw = (await this.helpers.httpRequest(options)) as string;
 	} catch (error) {
 		const e = error as {
 			httpCode?: string;
@@ -182,6 +182,14 @@ export async function autoElevateApiRequest<T = IDataObject>(
 			message: `AutoElevate ${method} ${target} returned ${status || 'no status'}`,
 			description: [h, retryAfter ? `Retry-After: ${retryAfter}s` : ''].filter(Boolean).join(' '),
 		});
+	}
+	try {
+		return (raw ? JSON.parse(raw) : {}) as T;
+	} catch {
+		throw new NodeOperationError(
+			this.getNode(),
+			`AutoElevate ${method} ${target} returned a body that is not JSON (${raw.length} bytes, starts with "${raw.slice(0, 40)}"). The API may be behind a proxy or returned an HTML error page; check the Base URL.`,
+		);
 	}
 }
 
