@@ -1,35 +1,68 @@
 # n8n-nodes-autoelevate
 
-An [n8n](https://n8n.io/) community node for the [AutoElevate](https://www.autoelevate.com/)
-Partner API (beta). It reads companies, computers, locations, elevation requests, events,
-sessions and rules, and the audit log, and it can count active agents per company for billing
-reconciliation.
+This is an n8n community node. It lets you read data from the [AutoElevate](https://www.autoelevate.com/)
+Partner API (beta) in your n8n workflows: companies, computers, locations, elevation requests,
+events, sessions and rules, the audit log, and per-company active-agent counts for billing.
 
-The node is **read-only by design**. The API's two write operations (approve and deny an
-elevation request) are not implemented. Create the API key without the `requestEdit` scope and
-the API enforces the same boundary.
+AutoElevate is a privilege access management product from CyberFOX for managed service providers.
+Its Partner API exposes each MSP's tenant data to integrations.
 
-> The Partner API is in beta and can change without notice. The node sends the required
-> `X-Acknowledgment: i-understand-this-is-beta-and-may-change` header on every request and
-> pins `/api/v1/` paths.
+[n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
-[Installation](#installation) · [Credentials](#credentials) · [Operations](#operations) ·
-[Agent counts for billing](#agent-counts-for-billing) · [Rate limits](#rate-limits) ·
-[Development](#development)
+- [Installation](#installation)
+- [Operations](#operations)
+- [Credentials](#credentials)
+- [Compatibility](#compatibility)
+- [Usage](#usage)
+  - [Agent counts for billing](#agent-counts-for-billing)
+  - [Timestamps](#timestamps)
+  - [Rate limits](#rate-limits)
+  - [Development](#development)
+- [Resources](#resources)
+- [Changelog](#changelog)
+- [Attribution](#attribution)
+- [License](#license)
 
 ## Installation
 
-Follow the [community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/)
-and install `n8n-nodes-autoelevate`.
+Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in
+the n8n community nodes documentation. The package name is `n8n-nodes-autoelevate`.
+
+## Operations
+
+The node is **read-only by design**. The API's two write operations (approve and deny an elevation
+request) are not implemented. Create the API key without the `requestEdit` scope and the API
+enforces the same boundary.
+
+| Resource | Operations | Filters |
+|---|---|---|
+| Usage | Get, Get Agent Counts by Company | |
+| Company | Get, Get Many | |
+| Computer | Get, Get Many | Company, Location |
+| Location | Get, Get Many | Company |
+| Elevation Request | Get, Get Many | Approval State, Company, Start, End |
+| Elevation Event | Get Many | Company, Start, End |
+| Elevated Session | Get, Get Many | Company, Computer ID, Status |
+| Elevation Rule | Get Many | Company |
+| Audit Log | Get Many | Action, Entity Type, Start, End |
+
+- **Get Many** pages at the API maximum (200 rows) and checks the rows returned against the
+  server's `totalCount`. A mismatch stops the node with a message instead of returning a silently
+  short list.
+- **Computer → Get Many** returns only computers that checked in within the **last 30 days**. That
+  is the API's active-fleet window, so it is the billable count, not the inventory.
+- **Start** and **End** accept any date n8n can parse and are sent as epoch milliseconds.
+- The company and location dropdowns list what the key can see. A restricted key sees only its
+  permitted companies.
 
 ## Credentials
 
 1. In the AutoElevate admin portal, open **Users** and create a **service user** for n8n. Don't
    attach keys to a person's account.
 2. In that user's **API Keys** section, add a key. Prefer **HMAC (AE-HMAC-SHA256)**: it shows a
-   token (`aeh_…`) and a separate signing key, and every request is signed so a captured
-   request can't be replayed elsewhere or after five minutes. **API Token (AE-BEARER)** gives
-   one `aeb_…` secret.
+   token (`aeh_…`) and a separate signing key, and every request is signed so a captured request
+   can't be replayed elsewhere or after five minutes. **API Token (AE-BEARER)** gives one `aeb_…`
+   secret.
 3. Grant only the scopes you need (table below) and set the shortest practical expiry.
 4. Copy both values immediately. They are shown once.
 
@@ -59,35 +92,21 @@ count. A `401` means the token, signing key, or scheme is wrong; a `403` means t
 | Elevation Rule | `ruleView` |
 | Audit Log | `auditLogView` (may also need Early Access enrolment) |
 
-## Operations
+The [CyberFOX support article](https://support.cyberfox.com/360000239832-General-Troubleshooting/autoelevate-partner-api-beta)
+covers service users, key creation, and 401/403 troubleshooting in more detail.
 
-| Resource | Operations | Filters |
-|---|---|---|
-| Usage | Get, Get Agent Counts by Company | |
-| Company | Get, Get Many | |
-| Computer | Get, Get Many | Company, Location |
-| Location | Get, Get Many | Company |
-| Elevation Request | Get, Get Many | Approval State, Company, Start, End |
-| Elevation Event | Get Many | Company, Start, End |
-| Elevated Session | Get, Get Many | Company, Computer ID, Status |
-| Elevation Rule | Get Many | Company |
-| Audit Log | Get Many | Action, Entity Type, Start, End |
+## Compatibility
 
-Notes:
+Built and tested against n8n 2.38 with `n8nNodesApiVersion` 1. It uses only `n8n-workflow` and
+Node's `crypto`; there are no other runtime dependencies. Node.js 20 or later.
 
-- **Get Many** pages at the API maximum (200 rows) and checks the rows returned against the
-  server's `totalCount`. A mismatch stops the node with a message instead of returning a
-  silently short list.
-- **Computer → Get Many** returns only computers that checked in within the **last 30 days**.
-  That is the API's active-fleet window, so it is the billable count, not the inventory.
-- **Start** and **End** accept any date n8n can parse and are sent as epoch milliseconds.
-- The API returns every timestamp as epoch milliseconds in a field ending in `At`. The node
-  keeps that value and adds an `…AtIso` twin in ISO-8601 UTC (`createdAt` → `createdAtIso`).
-  `endedAt` on an elevated session is the scheduled end, not updated if the session ended early.
-- The company and location dropdowns list what the key can see. A restricted key sees only
-  its permitted companies.
+> The Partner API is in beta and can change without notice. The node sends the required
+> `X-Acknowledgment: i-understand-this-is-beta-and-may-change` header on every request and pins
+> `/api/v1/` paths.
 
-## Agent counts for billing
+## Usage
+
+### Agent counts for billing
 
 **Usage → Get Agent Counts by Company** emits one flat item per company on the first output:
 
@@ -111,31 +130,56 @@ carries one item:
 `activeAgentsFromUsage` is the API's periodically refreshed snapshot; `activeAgentsFromComputers`
 is the live walk. A difference of a few units is snapshot lag. `managementSystemCompanyId` is the
 key a PSA integration set when it created the company, which is how you join these rows to
-Autotask, ConnectWise, or Halo. Companies with zero agents are present with `0`; a computer
-whose company the key can't see appears in a row with `companyName: null`.
+Autotask, ConnectWise, or Halo. Companies with zero agents are present with `0`; a computer whose
+company the key can't see appears in a row with `companyName: null`.
 
 The operation walks `/companies` and `/computers` once each and reads `/usage` once. For N
-computers and C companies that is `ceil(N/200) + ceil(C/200) + 1` requests.
+computers and C companies that is `ceil(N/200) + ceil(C/200) + 1` requests. It runs once per
+input item, so feed it a single item.
 
-## Rate limits
+### Timestamps
+
+The API returns every timestamp as epoch milliseconds in a field ending in `At`. The node keeps
+that value and adds an `…AtIso` twin in ISO-8601 UTC (`createdAt` → `createdAtIso`). `endedAt` on
+an elevated session is the scheduled end, not updated if the session ended early.
+
+### Rate limits
 
 The API allows **100 requests per hour per HTTP method and route**. A `429` stops the node with
-the `Retry-After` value in the message. The node does not retry on its own. Schedule billing
-runs accordingly and avoid Return All on large event or request histories inside a loop.
+the `Retry-After` value in the message. The node does not retry on its own. Schedule billing runs
+accordingly and avoid Return All on large event or request histories inside a loop.
 
-## Development
+### Development
 
-```bash
-npm install
-npm run lint
-npm run build
-npm run dev          # local n8n with the node loaded
-```
+From `n8n-nodes-autoelevate/`:
+
+- `npm install` installs dependencies.
+- `npm run lint` runs the n8n community-node linter; `npm run build` compiles to `dist/`.
+- `npm run dev` launches a local n8n with the node loaded.
 
 The OpenAPI document this node was written against is in `openapi/` with its provenance. The
 signing algorithm and the pagination rules mirror
 [`@dszp/autoelevate-lib`](https://github.com/dszp/autoelevate-lib), which is the reference
 implementation with offline test vectors; keep the two transports in step.
+
+## Resources
+
+- [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
+- [AutoElevate Partner API reference](https://partner-api-docs.autoelevate.com/): endpoints,
+  versioning, rate limits, and the OpenAPI document
+- [CyberFOX support: AutoElevate Partner API (Beta)](https://support.cyberfox.com/360000239832-General-Troubleshooting/autoelevate-partner-api-beta)
+- [`@dszp/autoelevate-lib`](https://github.com/dszp/autoelevate-lib): the same client for
+  Cloudflare Workers, Node, and the browser
+
+## Changelog
+
+For a version history of changes and updates, see [CHANGELOG.md](CHANGELOG.md).
+
+## Attribution
+
+AutoElevate is a product of CyberFOX, which owns the AutoElevate trademarks and intellectual
+property. This node is not affiliated with or endorsed by CyberFOX and is provided as a service
+to the n8n community.
 
 ## License
 
