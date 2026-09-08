@@ -24,6 +24,7 @@ export type AutoElevateCredentials = {
 	token: string;
 	hmacSecret?: string;
 	baseUrl?: string;
+	allowWrites?: boolean;
 };
 
 type Ctx =
@@ -113,6 +114,8 @@ function hint(status: number, path: string): string {
 			return path.includes('/audit-logs')
 				? 'The key lacks the auditLogView scope, or the tenant is not enrolled in the audit-log Early Access.'
 				: 'The key lacks the scope this endpoint requires (see the README scope table).';
+		case 409:
+			return 'The request is not in a state that allows this transition (it must be PENDING).';
 		case 429:
 			return 'Rate limited: 100 requests per hour per method and route. Wait for the Retry-After period.';
 		default:
@@ -124,28 +127,47 @@ async function getCredentials(ctx: Ctx): Promise<AutoElevateCredentials> {
 	return (await ctx.getCredentials('autoElevateApi')) as AutoElevateCredentials;
 }
 
-/** One GET against the Partner API. Returns the parsed JSON body. */
+/** Writes are opt-in per credential. Enforced here, not in the UI, so a tool call cannot bypass it. */
+export async function assertWritesAllowed(this: Ctx, itemIndex: number): Promise<void> {
+	const creds = await getCredentials(this);
+	if (creds.allowWrites !== true) {
+		throw new NodeOperationError(
+			this.getNode(),
+			'This credential does not allow write operations. Turn on "Allow Write Operations" in the AutoElevate API credential (and make sure the key has the requestEdit scope) to approve or deny elevation requests.',
+			{ itemIndex },
+		);
+	}
+}
+
 export async function autoElevateApiRequest<T = IDataObject>(
 	this: Ctx,
 	method: IHttpRequestMethods,
 	path: string,
 	qs: IDataObject = {},
+	body?: unknown,
 ): Promise<T> {
 	const creds = await getCredentials(this);
 	const base = normalizeBaseUrl(creds.baseUrl);
 	const target = buildTarget(path, qs);
+	// Serialise once: the HMAC bodyHash and the bytes on the wire must be the same string.
+	const bodyText = body === undefined ? undefined : JSON.stringify(body ?? {});
+	const headers: Record<string, string> = {
+		Accept: 'application/json',
+		[ACKNOWLEDGMENT_HEADER]: ACKNOWLEDGMENT_VALUE,
+		Authorization: buildAuthorization(creds, method, target, bodyText ?? ''),
+	};
+	if (bodyText !== undefined) headers['Content-Type'] = 'application/json';
 	const options: IHttpRequestOptions = {
 		method,
 		url: `${base}${target}`,
-		headers: {
-			Accept: 'application/json',
-			[ACKNOWLEDGMENT_HEADER]: ACKNOWLEDGMENT_VALUE,
-			Authorization: buildAuthorization(creds, method, target),
-		},
-		json: true,
+		headers,
+		body: bodyText,
+		// json:false so n8n neither re-serialises the string body nor pre-parses the response.
+		json: false,
 	};
 	try {
-		return (await this.helpers.httpRequest(options)) as T;
+		const raw = (await this.helpers.httpRequest(options)) as string;
+		return (raw ? JSON.parse(raw) : {}) as T;
 	} catch (error) {
 		const e = error as {
 			httpCode?: string;
