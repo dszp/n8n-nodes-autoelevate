@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-autoelevate",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "n8n community node for the AutoElevate Partner API (beta): companies, computers, locations, elevation requests/events/sessions/rules, audit log, and per-company active-agent counts for billing. Read-only.",
 	"license": "MIT",
 	"homepage": "https://github.com/dszp/n8n-nodes-autoelevate",

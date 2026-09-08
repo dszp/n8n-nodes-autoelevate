@@ -1,15 +1,27 @@
 {
 	"node": "n8n-nodes-autoelevate",
-	"nodeVersion": "0.1.0",
+	"nodeVersion": "0.1.1",
 	"codexVersion": "1.0",
-	"categories": ["Development", "Utility"],
-	"alias": ["CyberFOX", "privilege access management", "PAM", "elevation"],
+	"categories": [
+		"Development",
+		"Utility"
+	],
+	"alias": [
+		"CyberFOX",
+		"privilege access management",
+		"PAM",
+		"elevation"
+	],
 	"resources": {
 		"credentialDocumentation": [
-			{ "url": "https://github.com/dszp/n8n-nodes-autoelevate?tab=readme-ov-file#credentials" }
+			{
+				"url": "https://github.com/dszp/n8n-nodes-autoelevate?tab=readme-ov-file#credentials"
+			}
 		],
 		"primaryDocumentation": [
-			{ "url": "https://github.com/dszp/n8n-nodes-autoelevate?tab=readme-ov-file" }
+			{
+				"url": "https://github.com/dszp/n8n-nodes-autoelevate?tab=readme-ov-file"
+			}
 		]
 	}
 }

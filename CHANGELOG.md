@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-09-08
+
+### Changed
+
+- First release published through GitHub Actions with npm provenance (OIDC trusted publishing).
+  No code changes from 0.1.0.
+
 ### Added
 
 - Initial node: Usage (Get, Get Agent Counts by Company), Company, Computer, Location,
