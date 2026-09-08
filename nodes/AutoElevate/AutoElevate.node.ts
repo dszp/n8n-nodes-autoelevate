@@ -36,6 +36,7 @@ import { usageOperations } from './descriptions/UsageDescription';
 import {
 	ACKNOWLEDGMENT_HEADER,
 	ACKNOWLEDGMENT_VALUE,
+	assertWritesAllowed,
 	autoElevateApiRequest,
 	autoElevateApiRequestAllCursor,
 	autoElevateApiRequestAllItems,
@@ -104,6 +105,54 @@ function toQuery(this: IExecuteFunctions, filters: IDataObject, itemIndex: numbe
 		}
 	}
 	return qs;
+}
+
+const RULE_LEVELS = new Set(['msp', 'company', 'location', 'computer']);
+const DENIAL_REASON_MAX = 1000;
+
+/** Mirrors @dszp/autoelevate-lib validateApprovePayload/validateDenyPayload. Fails before spending a request. */
+function validateWritePayload(
+	this: IExecuteFunctions,
+	op: 'approve' | 'deny',
+	p: IDataObject,
+	itemIndex: number,
+): IDataObject {
+	const body: IDataObject = {};
+	for (const [k, v] of Object.entries(p))
+		if (v !== '' && v !== undefined && v !== null) body[k] = v;
+	if (body.createRule === true && !body.ruleLevel) {
+		throw new NodeOperationError(this.getNode(), 'Set "Rule Level" when "Create Rule" is on.', {
+			itemIndex,
+		});
+	}
+	if (body.createRule !== true) delete body.ruleLevel; // a level without a rule is meaningless; do not send it
+	if (body.ruleLevel !== undefined && !RULE_LEVELS.has(String(body.ruleLevel))) {
+		throw new NodeOperationError(
+			this.getNode(),
+			`"Rule Level" must be one of msp, company, location, computer.`,
+			{ itemIndex },
+		);
+	}
+	if (op === 'approve') {
+		const d = body.durationInMinutes;
+		if (d !== undefined && (!Number.isInteger(d) || (d as number) <= 0)) {
+			throw new NodeOperationError(
+				this.getNode(),
+				'"Duration (Minutes)" must be a whole number greater than 0.',
+				{ itemIndex },
+			);
+		}
+	} else {
+		const r = body.denialReason;
+		if (typeof r === 'string' && [...r].length > DENIAL_REASON_MAX) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`"Denial Reason" must be at most ${DENIAL_REASON_MAX} characters.`,
+				{ itemIndex },
+			);
+		}
+	}
+	return body;
 }
 
 export class AutoElevate implements INodeType {
@@ -264,6 +313,36 @@ export class AutoElevate implements INodeType {
 							),
 						);
 					}
+				} else if (
+					resource === 'elevationRequest' &&
+					(operation === 'approve' || operation === 'deny')
+				) {
+					await assertWritesAllowed.call(this, i);
+					const id = (this.getNodeParameter('id', i) as string).trim();
+					if (!id) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Enter an ID in the "Elevation Request ID" field.',
+							{
+								itemIndex: i,
+							},
+						);
+					}
+					const raw = this.getNodeParameter(
+						operation === 'approve' ? 'approveOptions' : 'denyOptions',
+						i,
+						{},
+					) as IDataObject;
+					const body = validateWritePayload.call(this, operation, raw, i);
+					out = [
+						(await autoElevateApiRequest.call(
+							this,
+							'POST',
+							`/elevation-requests/${encodeURIComponent(id)}/${operation}`,
+							{},
+							body,
+						)) as IDataObject,
+					];
 				} else if (operation === 'get') {
 					const id = this.getNodeParameter('id', i) as string;
 					if (!id.trim()) {
