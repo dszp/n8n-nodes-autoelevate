@@ -24,6 +24,7 @@ export type AutoElevateCredentials = {
 	token: string;
 	hmacSecret?: string;
 	baseUrl?: string;
+	allowWrites?: boolean;
 };
 
 type Ctx =
@@ -113,6 +114,8 @@ function hint(status: number, path: string): string {
 			return path.includes('/audit-logs')
 				? 'The key lacks the auditLogView scope, or the tenant is not enrolled in the audit-log Early Access.'
 				: 'The key lacks the scope this endpoint requires (see the README scope table).';
+		case 409:
+			return 'The request is not in a state that allows this transition (it must be PENDING).';
 		case 429:
 			return 'Rate limited: 100 requests per hour per method and route. Wait for the Retry-After period.';
 		default:
@@ -124,42 +127,81 @@ async function getCredentials(ctx: Ctx): Promise<AutoElevateCredentials> {
 	return (await ctx.getCredentials('autoElevateApi')) as AutoElevateCredentials;
 }
 
-/** One GET against the Partner API. Returns the parsed JSON body. */
+const WRITES_NOT_ALLOWED_MESSAGE =
+	'This credential does not allow write operations. Turn on "Allow Write Operations" in the AutoElevate API credential (and make sure the key has the requestEdit scope) to approve or deny elevation requests.';
+
+/** Writes are opt-in per credential. Enforced here, not in the UI, so a tool call cannot bypass it. */
+export async function assertWritesAllowed(this: Ctx, itemIndex: number): Promise<void> {
+	const creds = await getCredentials(this);
+	if (creds.allowWrites !== true) {
+		throw new NodeOperationError(this.getNode(), WRITES_NOT_ALLOWED_MESSAGE, { itemIndex });
+	}
+}
+
 export async function autoElevateApiRequest<T = IDataObject>(
 	this: Ctx,
 	method: IHttpRequestMethods,
 	path: string,
 	qs: IDataObject = {},
+	body?: unknown,
 ): Promise<T> {
 	const creds = await getCredentials(this);
+	// Backstop for the dispatch-site check: no non-GET leaves this function unless the credential allows writes.
+	if (method !== 'GET' && creds.allowWrites !== true) {
+		throw new NodeOperationError(this.getNode(), WRITES_NOT_ALLOWED_MESSAGE);
+	}
 	const base = normalizeBaseUrl(creds.baseUrl);
 	const target = buildTarget(path, qs);
+	// Serialise once: the HMAC bodyHash and the bytes on the wire must be the same string.
+	const bodyText = body === undefined ? undefined : JSON.stringify(body ?? {});
+	const headers: Record<string, string> = {
+		Accept: 'application/json',
+		[ACKNOWLEDGMENT_HEADER]: ACKNOWLEDGMENT_VALUE,
+		Authorization: buildAuthorization(creds, method, target, bodyText ?? ''),
+	};
+	if (bodyText !== undefined) headers['Content-Type'] = 'application/json';
 	const options: IHttpRequestOptions = {
 		method,
 		url: `${base}${target}`,
-		headers: {
-			Accept: 'application/json',
-			[ACKNOWLEDGMENT_HEADER]: ACKNOWLEDGMENT_VALUE,
-			Authorization: buildAuthorization(creds, method, target),
-		},
-		json: true,
+		headers,
+		body: bodyText,
+		// json:false only controls the Accept default; the body is already a string above, and
+		// axios parses the response regardless — it always JSON-parses a JSON response body.
+		json: false,
 	};
+	let raw: unknown;
 	try {
-		return (await this.helpers.httpRequest(options)) as T;
+		raw = await this.helpers.httpRequest(options);
 	} catch (error) {
 		const e = error as {
 			httpCode?: string;
 			statusCode?: number;
+			status?: number;
 			message?: string;
-			response?: { headers?: Record<string, string> };
+			response?: { status?: number; headers?: Record<string, string>; data?: { message?: string } };
 		};
-		const status = Number(e.httpCode ?? e.statusCode ?? 0);
+		const status = Number(e.httpCode ?? e.statusCode ?? e.status ?? e.response?.status ?? 0);
 		const h = hint(status, path);
 		const retryAfter = e.response?.headers?.['retry-after'];
-		throw new NodeApiError(this.getNode(), error as JsonObject, {
+		// NodeApiError's constructor overwrites any `description` it is given with the response
+		// body's message when one exists, so the hint has to be set after construction.
+		const apiMessage = e.response?.data?.message;
+		const err = new NodeApiError(this.getNode(), error as JsonObject, {
 			message: `AutoElevate ${method} ${target} returned ${status || 'no status'}`,
-			description: [h, retryAfter ? `Retry-After: ${retryAfter}s` : ''].filter(Boolean).join(' '),
 		});
+		err.description = [apiMessage, h, retryAfter ? `Retry-After: ${retryAfter}s` : '']
+			.filter(Boolean)
+			.join(' ');
+		throw err;
+	}
+	if (typeof raw !== 'string') return (raw ?? {}) as T; // axios already parsed the JSON body
+	try {
+		return (raw ? JSON.parse(raw) : {}) as T;
+	} catch {
+		throw new NodeOperationError(
+			this.getNode(),
+			`AutoElevate ${method} ${target} returned a body that is not JSON (${raw.length} bytes, starts with "${raw.slice(0, 40)}"). The API may be behind a proxy or returned an HTML error page; check the Base URL.`,
+		);
 	}
 }
 

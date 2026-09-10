@@ -25,8 +25,13 @@ export function returnAllAndLimit(show: Show): INodeProperties[] {
 	];
 }
 
-/** A required record-ID field for Get operations. */
-export function idField(resource: string, label: string, hintText: string): INodeProperties {
+/** A required record-ID field for Get (and, when passed, other) operations. */
+export function idField(
+	resource: string,
+	label: string,
+	hintText: string,
+	operations: string[] = ['get'],
+): INodeProperties {
 	return {
 		displayName: label,
 		name: 'id',
@@ -35,7 +40,7 @@ export function idField(resource: string, label: string, hintText: string): INod
 		required: true,
 		placeholder: 'e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890',
 		description: hintText,
-		displayOptions: { show: { resource: [resource], operation: ['get'] } },
+		displayOptions: { show: { resource: [resource], operation: operations } },
 	};
 }
 

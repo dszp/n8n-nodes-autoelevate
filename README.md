@@ -15,6 +15,7 @@ Its Partner API exposes each MSP's tenant data to integrations.
 - [Compatibility](#compatibility)
 - [Usage](#usage)
   - [Agent counts for billing](#agent-counts-for-billing)
+  - [Approving and denying](#approving-and-denying)
   - [Timestamps](#timestamps)
   - [Rate limits](#rate-limits)
   - [Development](#development)
@@ -30,9 +31,10 @@ the n8n community nodes documentation. The package name is `n8n-nodes-autoelevat
 
 ## Operations
 
-The node is **read-only by design**. The API's two write operations (approve and deny an elevation
-request) are not implemented. Create the API key without the `requestEdit` scope and the API
-enforces the same boundary.
+The node reads by default. The two write operations, **Elevation Request → Approve** and
+**Deny**, are off unless the credential has **Allow Write Operations** turned on *and* the key
+carries the `requestEdit` scope; the node checks the toggle before sending anything, and the API
+enforces the scope with a 403. Keep separate credentials for reading and writing.
 
 | Resource | Operations | Filters |
 |---|---|---|
@@ -40,7 +42,7 @@ enforces the same boundary.
 | Company | Get, Get Many | |
 | Computer | Get, Get Many | Company, Location |
 | Location | Get, Get Many | Company |
-| Elevation Request | Get, Get Many | Approval State, Company, Start, End |
+| Elevation Request | Approve, Deny, Get, Get Many | Approval State, Company, Start, End |
 | Elevation Event | Get Many | Company, Start, End |
 | Elevated Session | Get, Get Many | Company, Computer ID, Status |
 | Elevation Rule | Get Many | Company |
@@ -74,6 +76,7 @@ In n8n, create an **AutoElevate API** credential:
 | API Token | The `aeh_…` or `aeb_…` token |
 | HMAC Signing Key | The signing key, exactly as displayed (HMAC only) |
 | Base URL | Leave at `https://partner-api.autoelevate.com` |
+| Allow Write Operations | Off by default. Turn on only on a credential meant to approve or deny elevation requests; the key also needs the `requestEdit` scope. |
 
 Saving the credential runs a signed `GET /usage` and reports the partner name and active-agent
 count. A `401` means the token, signing key, or scheme is wrong; a `403` means the key lacks
@@ -87,6 +90,7 @@ count. A `401` means the token, signing key, or scheme is wrong; a `403` means t
 | Computer | `computerView` |
 | Location | `locationView` |
 | Elevation Request | `requestView` |
+| Elevation Request → Approve / Deny | `requestEdit` |
 | Elevation Event | `eventView` |
 | Elevated Session | `elevatedSessionView` |
 | Elevation Rule | `ruleView` |
@@ -136,6 +140,30 @@ company the key can't see appears in a row with `companyName: null`.
 The operation walks `/companies` and `/computers` once each and reads `/usage` once. For N
 computers and C companies that is `ceil(N/200) + ceil(C/200) + 1` requests. It runs once per
 input item, so feed it a single item.
+
+### Approving and denying
+
+**Elevation Request → Approve** and **Deny** need a credential with **Allow Write Operations**
+turned on and a key carrying the `requestEdit` scope; the node checks both before sending
+anything. The request must be **PENDING**: approving or denying one that already moved —
+approved, denied, or withdrawn — returns a `409`, and the node's error message says so.
+
+| Approve Options | Meaning |
+|---|---|
+| Create Rule | Also creates an auto-approval rule from this request. Requires Rule Level. |
+| Duration (Minutes) | Session length for elevated-session requests; ignored for other request types. |
+| Elevation Type | Admin or User. Overrides the elevation level recorded on the request. |
+| Rule Level | Company, Computer, Location, or MSP (All Companies). Scope of the rule created when Create Rule is on. |
+
+| Deny Options | Meaning |
+|---|---|
+| Create Rule | Also creates a denial rule from this request. Requires Rule Level. |
+| Denial Reason | Plain text shown to the end user with the denial. Maximum 1000 characters. |
+| Rule Level | Company, Computer, Location, or MSP (All Companies). Scope of the rule created when Create Rule is on. |
+
+Both operations validate the payload before sending: Rule Level is required when Create Rule is
+on, Duration (Minutes) must be a positive whole number, and Denial Reason tops out at 1000
+characters. A bad value stops the node before it spends a request.
 
 ### Timestamps
 
