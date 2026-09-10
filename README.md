@@ -144,8 +144,8 @@ input item, so feed it a single item.
 ### Approving and denying
 
 **Elevation Request → Approve** and **Deny** need a credential with **Allow Write Operations**
-turned on and a key carrying the `requestEdit` scope; the node checks both before sending
-anything. The request must be **PENDING**: approving or denying one that already moved —
+turned on and a key carrying the `requestEdit` scope; the node checks the toggle before sending
+anything, and the API enforces the scope with a `403`. The request must be **PENDING**: approving or denying one that already moved —
 approved, denied, or withdrawn — returns a `409`, and the node's error message says so.
 
 | Approve Options | Meaning |
