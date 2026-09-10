@@ -183,15 +183,16 @@ export async function autoElevateApiRequest<T = IDataObject>(
 		const status = Number(e.httpCode ?? e.statusCode ?? e.status ?? e.response?.status ?? 0);
 		const h = hint(status, path);
 		const retryAfter = e.response?.headers?.['retry-after'];
-		// n8n fills `description` from the response body's message when it can; setting it here keeps
-		// the API's own sentence first and appends the hint, so both survive into the error panel.
+		// NodeApiError's constructor overwrites any `description` it is given with the response
+		// body's message when one exists, so the hint has to be set after construction.
 		const apiMessage = e.response?.data?.message;
-		throw new NodeApiError(this.getNode(), error as JsonObject, {
+		const err = new NodeApiError(this.getNode(), error as JsonObject, {
 			message: `AutoElevate ${method} ${target} returned ${status || 'no status'}`,
-			description: [apiMessage, h, retryAfter ? `Retry-After: ${retryAfter}s` : '']
-				.filter(Boolean)
-				.join(' '),
 		});
+		err.description = [apiMessage, h, retryAfter ? `Retry-After: ${retryAfter}s` : '']
+			.filter(Boolean)
+			.join(' ');
+		throw err;
 	}
 	if (typeof raw !== 'string') return (raw ?? {}) as T; // axios already parsed the JSON body
 	try {
