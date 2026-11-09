@@ -3,3 +3,7 @@ node_modules
 *.tgz
 .env
 .remember/
+
+# Claude Code per-user files: they can hold tokens copied from approved commands
+**/.claude/settings.local.json
+**/CLAUDE.local.md
